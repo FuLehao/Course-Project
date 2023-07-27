@@ -1,0 +1,259 @@
+---
+title: "LASSO"
+author: "Lehao Fu"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+```
+
+
+# 0 课本例题与作业题
+
+## 0.1 Estimation function
+```{r}
+soft <- function(x, lam){
+  ifelse(abs(x) > lam, sign(x)*(abs(x)-lam), 0)
+}
+
+l1_norm <- function(x, y){
+  sum(abs(x))
+}
+
+Prox_lasso <- function(n, p, beta0, lambda, iters, output, error_dis = "norm", sigma2 = 1){
+  set.seed(1)
+  x = matrix(rnorm(n*p), n, p)
+  if(error_dis == "norm"){
+    y = x %*% beta0 + rnorm(n, mean=0, sd=sqrt(sigma2))
+  }else if(error_dis == "chisq"){
+    y = x %*% beta0 + rchisq(n, df=2)
+  }else if(error_dis == "t"){
+    y = x %*% beta0 + rt(n, df=2)
+  }else if(error_dis == "cauchy"){
+    y = x %*% beta0 + rcauchy(n)
+  }
+  N = iters
+  beta_k <- rep(0, p)
+  beta_diff = 1; beta_diff_l = c()
+  iter = 0
+  epsilon = sqrt(.Machine$double.eps)
+  step = n/(svd(t(x)%*%x)$d[1])
+  
+  # iteration
+  for(iter in 1:N){
+    iter = iter + 1
+    temp = beta_k + (1/n)*step*t(x)%*%(y - x%*%beta_k)
+    beta_k_1 = sapply(temp, soft, lambda*step)
+    beta_diff = l1_norm(beta_k_1 - beta_k)
+    beta_diff_l = c(beta_diff_l, beta_diff)
+    beta_k = beta_k_1
+    if(beta_diff < epsilon) break
+  }
+  result = rbind(round(beta0, 2), round(beta_k, 2))
+  rownames(result) = c("beta0", "beta.hat")
+  colnames(result) = seq(from=1, to=p, by=1)
+  nonzero_index = (apply(result, 2, function(x) sum(x == 0)) != 2)
+  error_rate = l1_norm(beta0 - beta_k)/l1_norm(beta0)
+  if(output == T){
+    cat("dim of x = (", n, ", ", p, ")", "\n", "dim of y = ", n, "\n", "max_iters = ", N, "\n\n", sep = "")
+    cat("以下仅输出参数的非0列：", "\n")
+    print(result[, nonzero_index])
+    cat("iteration:", iter, "\t", "L1 loss:", l1_norm(beta0 - beta_k), "\n")
+    cat("error rate = ", error_rate, "\n")
+    plot(beta_diff_l, xlab = "t", ylab = "Error", type = "l", main = "L1 loss between beta_k and beta_{k+1}")
+  }
+  return(error_rate)
+}
+ggerror_curve <- function(lambda_seq, error_rate_l){
+  data = data.frame(lambda_seq = lambda_seq, error_rate_l = error_rate_l)
+  p = ggplot(data=data, aes(x=lambda_seq, y=error_rate_l))
+  p = p + geom_point() + geom_line() + labs(x = "lambda", y = "error rate") + geom_hline(aes(yintercept=1), colour="#990000", linetype="dashed") + coord_cartesian(ylim = c(0, 5))
+  return(p)
+}
+```
+
+## 0.2 PPT例子，例1
+```{r}
+# generate data
+n = 500; p = 8; lambda = 0.1; iters = 100
+beta0 = c(3, 1.5, 0, 0, 2, 0, 0, 0)
+error_rate = Prox_lasso(n, p, beta0, lambda, iters, output = T)
+```
+
+## 0.3 作业例子，例2
+```{r}
+n = 100; p = 300; lambda = 0.2; iters = 1000
+beta0 = c(rep(1/sqrt(10), 10), numeric(p-10))
+error_rate = Prox_lasso(n, p, beta0, lambda, iters, output = T)
+```
+
+# 1 Part1 验证lambda对于稀疏模型的回归估计的重要性
+
+## 1.1 例1
+```{r}
+n = 500; p = 8; iters = 100
+beta0 = c(3, 1.5, 0, 0, 2, 0, 0, 0)
+lambda_seq = seq(from=0, to=3, by=0.1)
+error_rate_l = numeric(length(lambda_seq))
+for(i in 1:length(lambda_seq)){
+  error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[i], iters = iters, output = F)
+  error_rate_l[i] = error_rate
+}
+# plot(x=lambda_seq, y=error_rate_l, type="l")
+p = ggerror_curve(lambda_seq, error_rate_l)
+p
+ggsave("output/part1/example1.jpg", p)
+```
+- 可以看出，当样本数大于待估计参数个数时，如果真模型是稀疏模型，增加L1惩罚项的确增加了估计的精度。
+
+- 但由于样本数较大，LASSO估计的结果和OLS的结果相差不大。
+
+
+## 1.2 例2
+```{r}
+n = 100; p = 300; iters = 100
+beta0 = c(rep(1, 10), numeric(p-10))
+lambda_seq = seq(from=0, to=3, by=0.1)
+error_rate_l = numeric(length(lambda_seq))
+for(i in 1:length(lambda_seq)){
+  error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[i], iters = iters, output = F)
+  error_rate_l[i] = error_rate
+}
+# plot(x=lambda_seq, y=error_rate_l, type="l")
+p = ggerror_curve(lambda_seq, error_rate_l)
+p
+ggsave("output/part1/example2.jpg", p)
+```
+
+- 可以看出，如果样本数小于参数维数，此时增加L1惩罚项引入稀疏性非常有必要。当lambda为0，即使用OLS时，估计的参数和真值之间误差非常大，我们定义的误差率达到了4，而通过引入L1正则项，当lambda在0.2附近的时候，误差率下降到了0.8。
+
+综上：
+
+- 在样本数小于参数维数时，引入L1正则项从而对模型增加稀疏性很有必要，在真模型具有稀疏性的时候能够明显降低误差率。
+
+- 如果lambda过小，则LASSO估计接近与最小二乘估计，参数的稀疏性得不到保证，在真模型具有稀疏性的情况下，估计效果不好；如果lambda较大，则损失函数中，L1正则项的比例较大，输出LASSO估计的结果可以看到，beta.hat成为了0向量，效果也不好。
+
+# 2 Part2 以下变量变化时，最优的lambda的变化情况
+
+## 2.1 模型稀疏性
+```{r}
+n = 100; p = 300; iters = 100
+beta0 = matrix(numeric(4*p), 4, p)
+beta0[1, 1:10] = rep(1, 10)
+beta0[2, 1:20] = rep(1, 20)
+beta0[3, 1:50] = rep(1, 50)
+beta0[4, 1:100] = rep(1, 100)
+lambda_seq = seq(from=0, to=3, by=0.1)
+error_rate_l = matrix(numeric(4*length(lambda_seq)), 4, length(lambda_seq))
+
+for(i in 1:4){
+  for(j in 1:length(lambda_seq)){
+    error_rate = Prox_lasso(n, p, beta0 = beta0[i,], lambda = lambda_seq[j], iters = iters, output = F, error_dis = "norm")
+    error_rate_l[i,j] = error_rate
+  }
+}
+
+p1 = ggerror_curve(lambda_seq, error_rate_l[1,]) + ggtitle(paste0("beta非0分量维数 = ", 10))
+p2 = ggerror_curve(lambda_seq, error_rate_l[2,]) + ggtitle(paste0("beta非0分量维数 = ", 20))
+p3 = ggerror_curve(lambda_seq, error_rate_l[3,]) + ggtitle(paste0("beta非0分量维数 = ", 50))
+p4 = ggerror_curve(lambda_seq, error_rate_l[4,]) + ggtitle(paste0("beta非0分量维数 = ", 100))
+p = ggpubr::ggarrange(p1, p2, p3, p4, nrow = 2, ncol = 2, labels = c('A', 'B', 'C', 'D'), font.label = list(color = "#ef1828"))
+p
+ggsave("output/part2/sparse_beta.jpg", p)
+```
+
+
+## 2.2 r = n/p（即样本量与参数维数的比值）
+以下恒定p=300，变化n
+
+```{r}
+p = 300; iters = 100; n_seq = c(10, 50, 300, 3000); r = n_seq/p
+beta0 = c(rep(1, 10), numeric(p-10))
+lambda_seq = seq(from=0, to=3, by=0.1)
+error_rate_l = matrix(numeric(length(n_seq)*length(lambda_seq)), length(n_seq), length(lambda_seq))
+
+for(i in 1:length(n_seq)){
+  for(j in 1:length(lambda_seq)){
+    error_rate = Prox_lasso(n_seq[i], p, beta0, lambda = lambda_seq[j], iters = iters, output = F)
+    error_rate_l[i,j] = error_rate
+  }
+}
+
+p1 = ggerror_curve(lambda_seq, error_rate_l[1,]) + ggtitle(paste0("r = n/p = ", round(n_seq[1]/p, 2)))
+p2 = ggerror_curve(lambda_seq, error_rate_l[2,]) + ggtitle(paste0("r = n/p = ", round(n_seq[2]/p, 2)))
+p3 = ggerror_curve(lambda_seq, error_rate_l[3,]) + ggtitle(paste0("r = n/p = ", round(n_seq[3]/p, 2)))
+p4 = ggerror_curve(lambda_seq, error_rate_l[4,]) + ggtitle(paste0("r = n/p = ", round(n_seq[4]/p, 2)))
+p = ggpubr::ggarrange(p1, p2, p3, p4, nrow = 2, ncol = 2, labels = c('A', 'B', 'C', 'D'), font.label = list(color = '#ef1828'))
+p
+ggsave("output/part2/r=n_p(p=300).jpg", p)
+```
+
+
+## 2.3 误差来自不同分布时，error rate的变化
+
+### 2.3.1 正态，不同方差
+```{r}
+n = 100; p = 300; iters = 100
+beta0 = c(rep(1, 10), numeric(p-10))
+sigma2_seq = c(1,3,5,10)
+lambda_seq = seq(from=0, to=3, by=0.1)
+error_rate_l = matrix(numeric(length(sigma2_seq)*length(lambda_seq)), length(sigma2_seq), length(lambda_seq))
+
+for(i in 1:length(sigma2_seq)){
+  for(j in 1:length(lambda_seq)){
+    error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[j], iters = iters, output = F, error_dis = "norm", sigma2 = sigma2_seq[i])
+    error_rate_l[i,j] = error_rate
+  }
+}
+
+p1 = ggerror_curve(lambda_seq, error_rate_l[1,]) + ggtitle(paste0("noise from N(0,", sigma2_seq[1], ")"))
+p2 = ggerror_curve(lambda_seq, error_rate_l[2,]) + ggtitle(paste0("noise from N(0,", sigma2_seq[2], ")"))
+p3 = ggerror_curve(lambda_seq, error_rate_l[3,]) + ggtitle(paste0("noise from N(0,", sigma2_seq[3], ")"))
+p4 = ggerror_curve(lambda_seq, error_rate_l[4,]) + ggtitle(paste0("noise from N(0,", sigma2_seq[4], ")"))
+p = ggpubr::ggarrange(p1, p2, p3, p4, nrow = 2, ncol = 2, labels = c('A1', 'A2', 'A3', 'A4'), font.label = list(color = "#ef1828"))
+p
+ggsave("output/part2/norm_var.jpg", p)
+```
+
+### 2.3.2 其他分布族，t, cauchy, chisq
+```{r}
+n = 100; p = 300; iters = 100
+beta0 = c(rep(1, 10), numeric(p-10))
+lambda_seq = seq(from=0, to=3, by=0.1)
+error_rate_l = matrix(numeric(4*length(lambda_seq)), 4, length(lambda_seq))
+
+# N(0, 1)
+for(j in 1:length(lambda_seq)){
+  error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[j], iters = iters, output = F, error_dis = "norm")
+  error_rate_l[1,j] = error_rate
+}
+# t_2
+for(j in 1:length(lambda_seq)){
+  error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[j], iters = iters, output = F, error_dis = "t")
+  error_rate_l[2,j] = error_rate
+}
+# Cauchy
+for(j in 1:length(lambda_seq)){
+  error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[j], iters = iters, output = F, error_dis = "cauchy")
+  error_rate_l[3,j] = error_rate
+}
+# Chisq_2
+for(j in 1:length(lambda_seq)){
+  error_rate = Prox_lasso(n, p, beta0, lambda = lambda_seq[j], iters = iters, output = F, error_dis = "chisq")
+  error_rate_l[4,j] = error_rate
+}
+
+p1 = ggerror_curve(lambda_seq, error_rate_l[1,]) + ggtitle(paste0("noise from N(0,1)"))
+p2 = ggerror_curve(lambda_seq, error_rate_l[2,]) + ggtitle(paste0("noise from t2"))
+p3 = ggerror_curve(lambda_seq, error_rate_l[3,]) + ggtitle(paste0("noise from Cauchy"))
+p4 = ggerror_curve(lambda_seq, error_rate_l[4,]) + ggtitle(paste0("noise from Chisq2"))
+p = ggpubr::ggarrange(p1, p2, p3, p4, nrow = 2, ncol = 2, labels = c('A1', 'B', 'C', 'D'), font.label = list(color = "#ef1828"))
+p
+ggsave("output/part2/diff_dist.jpg", p)
+```
